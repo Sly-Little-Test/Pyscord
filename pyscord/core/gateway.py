@@ -26,6 +26,7 @@ from asyncio import get_event_loop, AbstractEventLoop, ensure_future
 from platform import system
 from typing import Dict, Callable, Awaitable
 
+import websockets.exceptions
 from websockets import connect
 from websockets.legacy.client import WebSocketClientProtocol
 
@@ -34,6 +35,7 @@ from pyscord._config import GatewayConfig
 # TODO: Implement logging
 from pyscord.core.dispatch import GatewayDispatch
 from pyscord.core.handlers.heartbeat import handle_hello, handle_heartbeat
+from pyscord.exceptions import InvalidTokenError
 
 Handler = Callable[[WebSocketClientProtocol, GatewayDispatch], Awaitable[None]]
 
@@ -51,14 +53,33 @@ class Dispatcher:
 
     # TODO: Add intents argument
     # TODO: Add handlers argument
-    def __init__(self, token: str):
-        # TODO: Write docs for __init__.
+    def __init__(self, token: str) -> None:
+        """
+        :param token:
+            Bot token for discord's API.
+        """
+
+        if len(token) != 59:
+            raise InvalidTokenError(
+                "Discord Token must have exactly 59 characters."
+            )
+
         self.__token = token
         self.__keep_alive = True
 
         async def identify_and_handle_hello(socket: WebSocketClientProtocol,
                                             payload: GatewayDispatch):
-            # TODO: Fix docs
+            """
+            Handchecks with the Discord WebSocket API.
+
+            :param socket:
+                The current socket, which can be used to interact
+                with the Discord API.
+
+            :param payload:
+                The received payload from Discord.
+
+            """
             await socket.send(str(GatewayDispatch(2, {
                 "token": token,
                 "intents": 0,
@@ -108,10 +129,25 @@ class Dispatcher:
         # TODO: Implement logging
         async with connect(GatewayConfig.uri()) as socket:
             while self.__keep_alive:
-                await self.handler_manager(
-                    socket,
-                    GatewayDispatch.from_string(await socket.recv()),
-                    loop)
+                try:
+                    await self.handler_manager(
+                        socket,
+                        GatewayDispatch.from_string(await socket.recv()),
+                        loop)
+
+                except websockets.exceptions.ConnectionClosedError as exc:
+                    self.__keep_alive = False
+                    self.handle_error(exc)
+
+    @staticmethod
+    def handle_error(exc) -> None:
+        """Handle exceptions when connection is closed unexpectedly.
+
+        :param exc:
+            Exception raised by the handler_manager.
+        """
+        if exc.code == 4004:
+            raise InvalidTokenError()
 
     def run(self):
         """
